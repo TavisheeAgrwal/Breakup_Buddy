@@ -34,7 +34,6 @@ chat = client.chats.create(
     model="gemini-2.5-flash", 
     config=config
 )
-# --- EMOTION CLASSIFICATION FUNCTION ---
 
 def classify_emotion(client: genai.Client, user_input: str) -> str:
     """Uses the LLM to classify the primary emotion in the user's text."""
@@ -55,15 +54,12 @@ def classify_emotion(client: genai.Client, user_input: str) -> str:
             model='gemini-2.5-flash',
             contents=emotion_prompt,
         )
-        # Clean up the response to get just the label
-        # The .strip() and .split(',') handles potential extra text or whitespace
+
         return response.text.strip().replace('[', '').replace(']', '').split(',')[0]
     except Exception:
-        # Fallback if the API call fails
+
         return "Neutral"
 
-# --- END EMOTION CLASSIFICATION FUNCTION ---
-# --- CONVERSATION SUMMARIZATION FUNCTION ---
 
 def summarize_conversation(client: genai.Client, history: list) -> str:
     """Uses the LLM to summarize the conversation history, focusing on key themes."""
@@ -71,7 +67,6 @@ def summarize_conversation(client: genai.Client, history: list) -> str:
     if not history:
         return ""
         
-    # Format history into a clean string for the LLM
     history_text = "\n".join([f"{item['role']}: {item['content']}" for item in history])
 
     summary_prompt = f"""
@@ -92,43 +87,30 @@ def summarize_conversation(client: genai.Client, history: list) -> str:
     except Exception:
         return "It seems we've covered a lot today. How are you feeling right now?"
 
-# --- END CONVERSATION SUMMARIZATION FUNCTION ---
-
-# --- NEW RAG CONFIGURATION (START) ---
 
 CHROMA_DB_PATH = "./chroma_db"
 
-# 1. Initialize the Embeddings Model (MUST match the one used in rag_builder.py)
 try:
     embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
     
-    # 2. Load the Vector Store (ChromaDB) and expose the retriever
     vector_store = Chroma(persist_directory=CHROMA_DB_PATH, embedding_function=embeddings)
     
-    # k=2 retrieves the top 2 most relevant chunks from your knowledge base
     RAG_RETRIEVER = vector_store.as_retriever(search_kwargs={"k": 2}) 
     print("RAG System Loaded Successfully.")
     
 except Exception as e:
     print(f"Error loading RAG system: {e}. Check if 'chroma_db' exists.")
-    RAG_RETRIEVER = None # Fallback if RAG fails
+    RAG_RETRIEVER = None 
 
-# --- NEW RAG CONFIGURATION (END) ---
-# --- CONVERSATIONAL HISTORY TRACKING ---
 CONVERSATION_HISTORY = []
-# Maximum number of turns (user input + AI response) to store
 MAX_HISTORY_SIZE = 10 
-# --- END HISTORY TRACKING ---
-
-# ... (after the RAG Configuration block) ...
 
 print("--- Breakup Buddy Activated ---")
 print("Hello! I'm here to listen. Tell me what's on your mind today.")
 print("Type 'exit' to end the session.\n")
 
 while True:
-    # --- NEW: Check-in Mechanism (START) ---
-    # Trigger a check-in every 4 turns (8 entries in the history)
+
     if len(CONVERSATION_HISTORY) % 8 == 0 and len(CONVERSATION_HISTORY) > 0:
         print("\n--- BREAKUP BUDDY CHECK-IN ---")
         summary = summarize_conversation(client, CONVERSATION_HISTORY)
@@ -140,20 +122,17 @@ while True:
         break
 
     try:
-        # 0. NEW: Emotion Classification
+
         current_emotion = classify_emotion(client, user_input)
-        print(f"[DEBUG: Detected Emotion: {current_emotion}]") # For testing purposes
-        
-        # 1. Retrieve Relevant Context using RAG
+        print(f"[DEBUG: Detected Emotion: {current_emotion}]") 
+
         context = ""
         if RAG_RETRIEVER:
             retrieved_docs = RAG_RETRIEVER.invoke(user_input)
             context_chunks = [doc.page_content for doc in retrieved_docs]
             context = "\n--- RELEVANT COPING ADVICE ---\n" + "\n\n".join(context_chunks)
         
-        # 2. Construct the RAG-enhanced Message
-        # We now include the DETECTED EMOTION in the prompt
-        
+
         rag_message_to_send = f"""
         User Query: {user_input}
         
@@ -165,17 +144,13 @@ while True:
         Your response must be in character (Breakup Buddy persona), empathetic, and **must prioritize validation and gentle reassurance if the emotion is Sadness, Anger, or Anxiety**. Ground your advice in the provided knowledge if applicable.
         """
 
-        # 3. Send the RAG-enhanced message to the LLM
         response = chat.send_message(rag_message_to_send)
         
         print(f"Breakup Buddy: {response.text}\n")
-        # 4. Update Conversation History
         CONVERSATION_HISTORY.append({"role": "user", "content": user_input, "emotion": current_emotion})
         CONVERSATION_HISTORY.append({"role": "model", "content": response.text})
         
-        # Keep the history length reasonable
         if len(CONVERSATION_HISTORY) > MAX_HISTORY_SIZE:
-            # Drop the oldest two elements (one user, one model turn)
             CONVERSATION_HISTORY = CONVERSATION_HISTORY[2:]
         
     except Exception as e:
