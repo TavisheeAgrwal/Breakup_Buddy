@@ -1,47 +1,76 @@
 import os
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import CharacterTextSplitter
+from pathlib import Path
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 
-# 1. Define where your documents are and where the DB should go
-DATA_PATH = "./knowledge_base"
-CHROMA_DB_PATH = "./chroma_db"
+DATA_PATH = Path("./knowledge_base")
+CHROMA_DB_PATH = Path("./chroma_db")
+CHROMA_DB_PATH.mkdir(exist_ok=True)
+
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 def build_vector_store():
-    print("--- Starting RAG Vector Store Builder ---")
+    print("Starting RAG Builder — loading all PDFs & TXT from knowledge_base/")
 
-    # 2. Load the documents
     documents = []
-    for file in os.listdir(DATA_PATH):
-        if file.endswith((".txt", ".md")):
-            loader = TextLoader(os.path.join(DATA_PATH, file))
-            documents.extend(loader.load())
+    supported_exts = {".pdf", ".txt", ".md", ".markdown"}
+
+    for file_path in DATA_PATH.rglob("*.*"):
+        if file_path.suffix.lower() not in supported_exts:
+            continue
+
+        print(f"Loading → {file_path.name}")
+
+        
+        if file_path.suffix.lower() == ".pdf":
+            loader = PyPDFLoader(str(file_path))
+        else:
+            loader = TextLoader(str(file_path), encoding="utf-8")
+
+        loaded_docs = loader.load()
+
+        
+        for doc in loaded_docs:
+            doc.metadata.update({
+                "source": file_path.name,
+                "title": file_path.stem.replace("_", " ").replace("-", " "),
+                "source_folder": str(file_path.parent.name) if file_path.parent != DATA_PATH else "main_knowledge_base",
+                "source_type": "book_or_story"
+            })
+            documents.append(doc)
 
     if not documents:
-        print("No documents found to load. Check your knowledge_base folder.")
+        print("No files found! Put your PDFs directly in knowledge_base/")
         return
 
-    print(f"Loaded {len(documents)} document(s).")
+    print(f"Loaded {len(documents)} files")
 
-    # 3. Split the documents into smaller, searchable chunks
-    text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    docs = text_splitter.split_documents(documents)
-
-    print(f"Split into {len(docs)} text chunks.")
-
-    # 4. Create the Embeddings Model
-    # This model converts the text chunks into numerical vectors
-    embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
-
-    # 5. Create and Persist the Vector Store (ChromaDB)
-    # The store maps the text chunks to their vectors for fast retrieval
-    Chroma.from_documents(
-        documents=docs, 
-        embedding=embeddings, 
-        persist_directory=CHROMA_DB_PATH
+    
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=100,
+        add_start_index=True,
     )
-    print(f"Successfully built and saved ChromaDB to {CHROMA_DB_PATH}")
+    chunks = text_splitter.split_documents(documents)
+    print(f"Split into {len(chunks)} smart chunks")
+
+    
+    embeddings = SentenceTransformerEmbeddings(model_name=EMBEDDING_MODEL)
+
+    
+    if os.path.exists(CHROMA_DB_PATH / "chroma.sqlite3"):
+        print("Updating existing database...")
+        db = Chroma(persist_directory=str(CHROMA_DB_PATH), embedding_function=embeddings)
+        db.add_documents(chunks)
+    else:
+        print("Creating new database...")
+        Chroma.from_documents(chunks, embeddings, persist_directory=str(CHROMA_DB_PATH))
+
+    print(f"SUCCESS! Your RAG now has {len(chunks)} chunks")
+    print(f"Database saved at: {CHROMA_DB_PATH}")
+    print("Ready to chat! Run your query script now.")
 
 if __name__ == "__main__":
     build_vector_store()
